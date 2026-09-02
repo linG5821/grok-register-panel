@@ -96,7 +96,7 @@ def test_help_and_faq_module():
     assert 'body.help-view-open #dashboard-view > :not(#help-view) { display: none; }' in html
     assert 'role="tablist"' in html
     assert 'id="faq-search"' in html
-    assert len(re.findall(r'<details class="faq-item" data-faq-item', html)) == 15
+    assert len(re.findall(r'<details class="faq-item" data-faq-item', html)) == 16
     assert 'policy=deny' in html
     assert 'bfs' in html.lower()
     assert 'id="bfs-title"' in html
@@ -171,6 +171,25 @@ def test_sso_state_panel_structure():
     assert 'from webui.sso_state_ops import' in mon
     assert (ROOT / 'webui/sso_state_ops.py').is_file()
     assert (ROOT / 'scripts/check_sso_state.py').is_file()
+
+
+def test_quality_probe_panel_structure():
+    mon = (ROOT / 'webui/monitor.py').read_text(encoding='utf-8')
+    html = mon.split('HTML = r"""', 1)[1].split('"""', 1)[0]
+    assert 'id="quality-view-toggle"' in html
+    assert 'id="quality-view"' in html
+    assert 'id="quality-body"' in html
+    assert 'id="quality-dash-title"' in html
+    assert 'function toggleQualityView()' in mon
+    assert 'function startQualityScan()' in mon
+    assert 'function refreshQuality(' in mon
+    assert '/api/quality/start' in mon
+    assert 'view !== "quality"' in mon
+    assert 'from webui.quality_ops import' in mon
+    assert '推荐家宽出口 + Outlook' in html
+    assert (ROOT / 'webui/quality_ops.py').is_file()
+    assert (ROOT / 'quality_probe.py').is_file()
+    assert (ROOT / 'scripts/check_quality.py').is_file()
 
 
 def test_stats_refresh_persists_across_snapshot_polling():
@@ -273,6 +292,8 @@ if __name__ == '__main__':
     test_reference_motion_and_reduced_motion()
     test_compact_overview_density()
     test_help_and_faq_module()
+    test_sso_state_panel_structure()
+    test_quality_probe_panel_structure()
     test_stats_refresh_persists_across_snapshot_polling()
     test_batch_traffic_metric_structure()
     test_proxy_pool_panel_structure()

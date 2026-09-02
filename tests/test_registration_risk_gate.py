@@ -10,7 +10,8 @@ sys.path.insert(0, str(ROOT))
 import grok_register_ttk as register
 
 
-def test_registration_risk_policy():
+def test_registration_risk_policy_classifier_still_parses():
+    """The historical classifier stays for the deprecated SSO panel."""
     blocked_cases = (
         ({"denied": True}, "policy=deny,event=$registration"),
         ({"bot_flag_source": 1}, "botFlagSource=1"),
@@ -34,7 +35,7 @@ def test_registration_risk_policy():
         assert register._registration_risk_should_block(state) == (False, "")
 
 
-def test_risk_gate_runs_when_cpa_auto_add_is_disabled():
+def test_oauth_gate_no_longer_inspects_sso_botflag():
     previous_auto_add = register.config.get("cpa_auto_add")
     previous_functions = (
         register._resolve_cpa_proxy,
@@ -67,15 +68,10 @@ def test_risk_gate_runs_when_cpa_auto_add_is_disabled():
         lambda status, email, **kwargs: recorded.append((status, email, kwargs))
     )
     try:
-        try:
-            register.ensure_sso_oauth_eligible(
-                "sso=quarantined-token",
-                email="risk@example.test",
-            )
-        except register.RegistrationRiskDenied:
-            pass
-        else:
-            raise AssertionError("risk SSO was not blocked")
+        state = register.ensure_sso_oauth_eligible(
+            "sso=quarantined-token",
+            email="risk@example.test",
+        )
     finally:
         (
             register._resolve_cpa_proxy,
@@ -88,17 +84,11 @@ def test_risk_gate_runs_when_cpa_auto_add_is_disabled():
         else:
             register.config["cpa_auto_add"] = previous_auto_add
 
-    assert inspected == ["quarantined-token"]
-    assert quarantined == [
-        (
-            "risk@example.test",
-            "quarantined-token",
-            "risk=0.95,policy=allow,event=$registration",
-        )
-    ]
-    assert len(recorded) == 1
-    assert recorded[0][0:2] == ("risk", "risk@example.test")
-    assert recorded[0][2]["kind"] == register.FAIL_RISK
+    assert state.get("skipped") is True
+    assert state.get("error") == "sso_botflag_deprecated"
+    assert inspected == []
+    assert quarantined == []
+    assert recorded == []
 
 
 def test_unknown_state_continues_without_quarantine():
@@ -126,12 +116,12 @@ def test_unknown_state_continues_without_quarantine():
             register._append_sso_risk_rejected,
         ) = previous_functions
 
-    assert state["found"] is False
+    assert state.get("skipped") is True
     assert quarantined == []
 
 
 if __name__ == "__main__":
-    test_registration_risk_policy()
-    test_risk_gate_runs_when_cpa_auto_add_is_disabled()
+    test_registration_risk_policy_classifier_still_parses()
+    test_oauth_gate_no_longer_inspects_sso_botflag()
     test_unknown_state_continues_without_quarantine()
     print("OK registration risk gate")

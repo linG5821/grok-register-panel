@@ -1064,7 +1064,12 @@ def _registration_risk_should_block(state: dict) -> tuple:
 
 
 def ensure_sso_oauth_eligible(raw_token, email="", log_callback=None) -> dict:
-    """检查新账号风控状态；命中时保存 SSO 到隔离文件并终止正常入库。"""
+    """Validate SSO is present, then continue OAuth.
+
+    grok.com ``botFlagSource`` / ``policy=deny`` is no longer a reliable risk
+    signal, so this gate does not inspect the homepage or quarantine accounts.
+    Use the panel 降智测试 (real streamed replies over 家宽) instead.
+    """
     sso = _normalize_sso_token(raw_token)
     if not sso:
         raise RegistrationRiskDenied("注册风控检查失败: sso 为空")
@@ -1073,45 +1078,19 @@ def ensure_sso_oauth_eligible(raw_token, email="", log_callback=None) -> dict:
         if log_callback:
             log_callback(f"[风控] {str(message).strip()}")
 
-    _risk_log("检查新账号注册风控状态 ...")
-    state = _s2cpa.inspect_sso_account_state(
-        sso,
-        proxy=_resolve_cpa_proxy(),
-        log=_risk_log,
-    )
-    block, details = _registration_risk_should_block(state)
-    if block:
-        details = str(details or state.get("bot_flag_details") or "registration_risk")
-        _append_sso_risk_rejected(email, sso, details, log_callback=log_callback)
-        try:
-            _bf = state.get("bot_flag_source")
-            _rk = None
-            _mrisk = re.search(r"risk=([\d.]+)", str(details))
-            if _mrisk:
-                try:
-                    _rk = float(_mrisk.group(1))
-                except Exception:
-                    _rk = None
-            record_register_result(
-                "risk",
-                email or "",
-                kind=FAIL_RISK,
-                detail=f"botFlagSource={_bf} {details}",
-                bot_flag=_bf,
-                risk=_rk,
-                log_callback=log_callback,
-            )
-        except Exception:
-            pass
-        raise RegistrationRiskDenied(
-            "注册风控拒绝，已跳过 OAuth: "
-            f"botFlagSource={state.get('bot_flag_source')} {details}"
-        )
-    if not state.get("found"):
-        _risk_log(f"未读取到注册风控字段，继续 OAuth: {state.get('error') or 'unknown'}")
-    elif state.get("bot_flag_source") == 0:
-        _risk_log("注册风控状态可用: botFlagSource=0")
-    return state
+    _risk_log("已跳过 grok.com botFlag 检查（SSO 页面字段不再作为风控依据），继续 OAuth")
+    return {
+        "found": False,
+        "bot_flag_source": None,
+        "bot_flag_details": "",
+        "policy": "",
+        "risk": None,
+        "event": "",
+        "denied": False,
+        "status_code": 0,
+        "skipped": True,
+        "error": "sso_botflag_deprecated",
+    }
 
 
 def add_sso_to_cpa(raw_token, email="", log_callback=None) -> bool:
@@ -2760,13 +2739,13 @@ class GrokRegisterGUI:
             config_frame,
             self.email_provider_var,
             [
+                "outlook_rt",
                 "duckmail",
+                "mailnest",
                 "yyds",
                 "cloudflare",
-                "mailnest",
                 "cloudmail",
                 "moemail",
-                "outlook_rt",
             ],
             width=12,
         )
@@ -3074,7 +3053,7 @@ class GrokRegisterGUI:
             p_field(
                 tk_label(
                     self.provider_frame,
-                    text="jsonl: email+refresh_token；取号非购买；Graph 收信",
+                    text="推荐：Outlook + 家宽。jsonl: email+refresh_token",
                     bg=UI_PANEL_BG,
                 ),
                 2,
@@ -3268,7 +3247,7 @@ class GrokRegisterGUI:
             "mailnest": "MailNest 配置",
             "cloudmail": "CloudMail 配置",
             "moemail": "MoeMail 配置",
-            "outlook_rt": "Outlook RT 库存配置",
+            "outlook_rt": "Outlook RT 库存配置（推荐）",
         }
         self.provider_frame.configure(text=titles.get(provider, "邮箱服务商配置"))
         for widgets in self._provider_widget_groups.values():

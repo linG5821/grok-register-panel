@@ -67,6 +67,12 @@ try:
         start_sso_state_scan,
         stop_sso_state_scan,
     )
+    from webui.quality_ops import (
+        quality_status,
+        read_quality_export,
+        start_quality_scan,
+        stop_quality_scan,
+    )
     from webui.security_utils import (
         check_token_optional_read,
         expected_token,
@@ -109,6 +115,12 @@ except ImportError:  # running as script from webui/
         sso_state_status,
         start_sso_state_scan,
         stop_sso_state_scan,
+    )
+    from quality_ops import (  # type: ignore
+        quality_status,
+        read_quality_export,
+        start_quality_scan,
+        stop_quality_scan,
     )
     from security_utils import (  # type: ignore
         check_token_optional_read,
@@ -1425,6 +1437,37 @@ HTML = r"""<!DOCTYPE html>
   .proxy-job { color: var(--muted); font-size: 11px; }
   body.sso-view-open { overflow: hidden; }
   body.sso-view-open #dashboard-view > :not(#sso-view) { display: none; }
+  body.quality-view-open { overflow: hidden; }
+  body.quality-view-open #dashboard-view > :not(#quality-view) { display: none; }
+  .quality-view {
+    position: fixed;
+    inset: 68px 0 0;
+    z-index: 8;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+  .quality-view[hidden] { display: none; }
+  .recommend-banner {
+    margin: 0 0 14px;
+    padding: 10px 12px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+    background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+    color: var(--text);
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .recommend-banner.warn {
+    border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+    background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+  }
+  .sso-verdict.healthy { border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); color: var(--ok); }
+  .sso-verdict.soft, .sso-verdict.burst { border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); color: var(--warn); }
+  .sso-verdict.hard, .sso-verdict.risk { border-color: color-mix(in srgb, var(--fail) 55%, var(--border)); color: var(--fail); }
   .sso-view {
     position: fixed;
     inset: 68px 0 0;
@@ -1983,7 +2026,10 @@ HTML = r"""<!DOCTYPE html>
       <button type="button" class="view-switch" id="proxy-view-toggle" aria-label="打开代理池" title="代理池" aria-controls="proxy-view" aria-expanded="false" data-active="false" onclick="toggleProxyView()">
         <span id="proxy-view-label" aria-hidden="true">代理池</span>
       </button>
-      <button type="button" class="view-switch" id="sso-view-toggle" aria-label="打开 SSO 风控" title="SSO 风控" aria-controls="sso-view" aria-expanded="false" data-active="false" onclick="toggleSsoView()">
+      <button type="button" class="view-switch" id="quality-view-toggle" aria-label="打开降智测试" title="降智测试" aria-controls="quality-view" aria-expanded="false" data-active="false" onclick="toggleQualityView()">
+        <span id="quality-view-label" aria-hidden="true">降智测试</span>
+      </button>
+      <button type="button" class="view-switch" id="sso-view-toggle" aria-label="打开 SSO 风控（已停用）" title="SSO 风控（已停用）" aria-controls="sso-view" aria-expanded="false" data-active="false" onclick="toggleSsoView()">
         <span id="sso-view-label" aria-hidden="true">SSO 风控</span>
       </button>
       <button type="button" class="view-switch" id="help-view-toggle" aria-label="打开问题和使用" title="问题和使用" aria-controls="help-view" aria-expanded="false" data-active="false" onclick="toggleAppView()">
@@ -2014,7 +2060,7 @@ HTML = r"""<!DOCTYPE html>
     <div class="control-grid">
       <div class="field field-token">
         <label for="monitor-token">访问令牌</label>
-        <input id="monitor-token" type="password" autocomplete="off" placeholder="MONITOR_TOKEN" onchange="getToken(); refresh(); refreshRecovery(); refreshProxies(); refreshEmailProvider(); refreshEmailDomains(); refreshSsoState(); refreshBfs()" onblur="getToken()"/>
+        <input id="monitor-token" type="password" autocomplete="off" placeholder="MONITOR_TOKEN" onchange="getToken(); refresh(); refreshRecovery(); refreshProxies(); refreshEmailProvider(); refreshEmailDomains(); refreshSsoState(); refreshQuality(); refreshBfs()" onblur="getToken()"/>
       </div>
       <div class="field field-mode">
         <label for="mode">运行模式</label>
@@ -2074,7 +2120,7 @@ HTML = r"""<!DOCTYPE html>
           </div>
           <div class="help-guide-item">
             <h3>观察结果</h3>
-            <p>优先看注册风控、时段成功率和日志尾部。连续风控时先换出口或邮箱域名，不要继续提高并发。</p>
+            <p>优先看时段成功率、降智测试和日志尾部。出口用家宽，邮箱用 Outlook；不要用域名邮箱硬打，也不要继续提高并发。</p>
           </div>
         </div>
         <p class="help-note">停止任务会结束当前编排和批处理进程。重置黑名单会恢复基线规则，不等于清空所有风控判断。</p>
@@ -2084,7 +2130,7 @@ HTML = r"""<!DOCTYPE html>
         <div class="faq-tools">
           <label class="sr-only" for="faq-search">搜索常见问题</label>
           <input id="faq-search" type="search" placeholder="搜索错误码或现象" autocomplete="off" oninput="filterFaq(this.value)"/>
-          <span class="faq-count mono" id="faq-count">12 项</span>
+          <span class="faq-count mono" id="faq-count">16 项</span>
         </div>
         <div class="faq-grid" id="faq-grid">
           <details class="faq-item" data-faq-item data-search="令牌 token unauthorized 401 保存设置 启动">
@@ -2095,17 +2141,21 @@ HTML = r"""<!DOCTYPE html>
             <summary>点击启动后立即结束</summary>
             <div class="faq-answer">通常是 CPA 已达到旧目标。提高“追加目标”后再启动；持续编排会以当前 CPA 为基线增加 N，单批运行只执行“单批数量”。</div>
           </details>
-          <details class="faq-item" data-faq-item data-search="风控 policy deny registration risk botFlagSource ip 邮箱 域名">
+          <details class="faq-item" data-faq-item data-search="风控 policy deny registration risk botFlagSource ip 邮箱 域名 家宽 outlook">
             <summary>出现 policy=deny 或注册风控</summary>
-            <div class="faq-answer">该账号已被注册风控拒绝，不要反复重转同一 SSO。先更换质量更好的出口并给 IP 冷却时间，邮箱优先使用稳定的子域名，并发先保持 2-3。</div>
+            <div class="faq-answer">grok.com 的 botFlag / policy 已不能可靠判断风控。注册门禁不再据此跳过 OAuth。要确认账号能不能聊、有没有降智，用顶部“降智测试”走家宽实聊。出口优先家宽，邮箱优先 Outlook，不要用域名邮箱作为主路径，并发先保持 2-3。</div>
           </details>
           <details class="faq-item" data-faq-item data-search="bfs jwt claim access_token 标记 flagged 风控 检测 scan">
             <summary>什么是 bfs，和 botFlagSource 有何不同</summary>
             <div class="faq-answer"><code>bfs</code> 是 xAI access_token / SSO JWT 里的风险 claim：payload 里<strong>出现该字段</strong>即视为标记（常见值 2）。它与 grok.com 页面的 <code>botFlagSource</code> / <code>policy=deny</code> 独立。注册换 token 后会自动检测；也可在控制台“BFS 检测”扫描 CPA 目录，导出 <code>log/bfs_flagged.jsonl</code>。配置 <code>bfs_skip_cpa</code> 可跳过入库，<code>bfs_disable_cpa</code> 可写 disabled。</div>
           </details>
-          <details class="faq-item" data-faq-item data-search="sso 风控 botFlagSource policy deny check-sso-state 检测 面板 粘贴">
-            <summary>如何用 SSO 批量检测账号是否被风控</summary>
-            <div class="faq-answer">打开顶部“SSO 风控”，粘贴 <code>email----sso</code> 或纯 cookie，也可扫描待处理 / 全部账号 / 已隔离名单。面板用 SSO 访问 grok.com 读取 <code>botFlagSource</code> 和 <code>policy=deny</code>，不换 token、不入库。标记规则与注册门禁一致：<code>botFlagSource</code> 为 1/2，或任意 <code>policy=deny</code>。面板下载只包含脱敏状态，不含 SSO；完整干净名单仅写入本机权限为 <code>0600</code> 的 <code>log/sso_clean.txt</code>，供主机上的 CLI 继续使用。标记名单写到 <code>log/sso_flagged.jsonl</code>（不含 token）。命令行：<code>python scripts/check_sso_state.py --sso list.txt --from-config config.json</code>。</div>
+          <details class="faq-item" data-faq-item data-search="sso 风控 botFlagSource policy deny check-sso-state 检测 面板 粘贴 停用 deprecated">
+            <summary>SSO 风控还能用吗</summary>
+            <div class="faq-answer">不能再作为判定。grok.com 页面上的 <code>botFlagSource</code> / <code>policy=deny</code> 已不可靠，注册也不会再据此拦截 OAuth。顶部仍保留旧扫描面板，仅供对照。请改用“降智测试”。</div>
+          </details>
+          <details class="faq-item" data-faq-item data-search="降智测试 quality probe 家宽 thinking tps 实聊 账号 批量">
+            <summary>如何批量测试账号是否降智</summary>
+            <div class="faq-answer">打开顶部“降智测试”，选择 CPA / Grok2API auth 目录，用配置好的家宽出口让每个账号实际流式回复。缺少 thinking、Token/s 过高记为降智；401/403 / permission-denied 记为风控。命令行：<code>python scripts/check_quality.py --dir cpa_auth --from-config config.json</code>。脱敏结果写到 <code>log/quality_degraded.jsonl</code> 和 <code>log/quality_risk.jsonl</code>。</div>
           </details>
           <details class="faq-item" data-faq-item data-search="卡住 浏览器 启动失败 turnstile 资料页 空页 并发 camoufox">
             <summary>注册卡在验证码、资料页或浏览器启动</summary>
@@ -2127,9 +2177,9 @@ HTML = r"""<!DOCTYPE html>
             <summary>邮箱 API 返回 401 或请求超时</summary>
             <div class="faq-answer">401 先检查对应邮箱服务的 key 和 <code>auth_mode</code>。访问 workers.dev 超时时，在配置中显式填写代理，不要只依赖桌面进程可能无法继承的 HTTP_PROXY 环境变量。</div>
           </details>
-          <details class="faq-item" data-faq-item data-search="邮箱服务 provider cloudflare duckmail yyds mailnest cloudmail moemail outlook_rt inbucket 自建 jsonl refresh_token api 测试 域名轮换">
+          <details class="faq-item" data-faq-item data-search="邮箱服务 provider cloudflare duckmail yyds mailnest cloudmail moemail outlook_rt inbucket 自建 jsonl refresh_token api 测试 域名轮换 家宽 推荐">
             <summary>如何配置邮箱服务</summary>
-            <div class="faq-answer">打开顶部“邮箱服务”，选择当前使用的服务商后填写对应 API 配置，保存并测试连通性。Outlook RT 库存模式填写 jsonl（email + refresh_token）路径即可，无需 client_id。Inbucket 自建模式填写实例地址和收信根域名（可逗号分隔多个轮换，MX 需指向实例），随机子域级数可选（需泛解析收信）。自有域名轮换位于同页高级设置；只有 xAI 明确拒绝域名才累计，邮箱 API 和验证码异常不会处罚域名。</div>
+            <div class="faq-answer">推荐家宽出口 + Outlook 等真实邮箱，不要把域名邮箱当作主路径。打开顶部“邮箱服务”，优先选 Outlook RT，填写 jsonl（email + refresh_token）后保存并测试。其它临时邮或自有域名仅作备选；自有域名轮换仍在同页高级设置，但容易被拒。</div>
           </details>
           <details class="faq-item" data-faq-item data-search="黑名单 asn 清除 重置 baseline 风控 出口">
             <summary>黑名单有什么作用，可以清除吗</summary>
@@ -2215,6 +2265,7 @@ HTML = r"""<!DOCTYPE html>
         </div>
         <span class="domain-job" id="mail-provider-heading-label">--</span>
       </div>
+      <p class="recommend-banner" id="mail-recommend">推荐家宽出口 + Outlook 等真实邮箱。域名邮箱（自有域 / 临时域）容易被拒，不要作为主路径。</p>
 
       <section class="mail-provider-panel" aria-labelledby="mail-provider-label">
         <div class="mail-provider-toolbar">
@@ -2246,6 +2297,7 @@ HTML = r"""<!DOCTYPE html>
           <span class="domain-advanced-meta mono" id="domain-advanced-count">0 个域名</span>
         </summary>
         <div class="domain-advanced-body">
+          <p class="recommend-banner warn">域名邮箱不推荐。优先改用 Outlook 库存；这里只保留给已有自有域的备选轮换。</p>
           <div class="domain-advanced-head">
             <span class="domain-advanced-meta">仅 xAI 明确拒绝域名时累计失败</span>
             <span class="domain-job mono" id="domain-updated">等待读取</span>
@@ -2319,7 +2371,7 @@ HTML = r"""<!DOCTYPE html>
         <div>
           <div class="mail-source-kicker">Account state</div>
           <div class="page-title" id="sso-view-title">SSO 风控</div>
-          <p class="sso-view-subtitle">用 SSO 读取 grok.com 的 botFlagSource / policy，不换 token、不入库</p>
+          <p class="sso-view-subtitle">已停用：grok.com botFlag / policy 不再作为风控依据，请改用降智测试</p>
         </div>
         <span class="sso-job mono" id="sso-heading-status">尚未扫描</span>
       </div>
@@ -2356,7 +2408,7 @@ HTML = r"""<!DOCTYPE html>
                 <input id="sso-proxy" type="text" autocomplete="off" placeholder="沿用 config.proxy"/>
               </div>
             </div>
-            <p class="sso-format" id="sso-source-hint">粘贴 JWT 或 email----sso。判定规则与注册门禁一致：botFlag 1/2 或 policy=deny 记为标记。</p>
+            <p class="sso-format" id="sso-source-hint">已停用。此扫描仅对照历史字段，不能判断账号是否可聊或降智。</p>
           </div>
           <div class="button-group">
             <button class="primary" id="sso-start" onclick="startSsoScan()">开始检测</button>
@@ -2385,6 +2437,87 @@ HTML = r"""<!DOCTYPE html>
           <table class="sso-table">
             <thead><tr><th>邮箱</th><th>bot</th><th>policy</th><th>risk</th><th>event</th><th>判定</th><th>说明</th></tr></thead>
             <tbody id="sso-body"><tr><td colspan="7" class="sso-empty">粘贴 SSO 或选择库存后开始检测</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sso-view quality-view" id="quality-view" aria-labelledby="quality-view-title" hidden>
+    <div class="sso-view-inner">
+      <div class="sso-view-heading">
+        <div>
+          <div class="mail-source-kicker">Chat quality</div>
+          <div class="page-title" id="quality-view-title">降智测试</div>
+          <p class="sso-view-subtitle">用配置的家宽让账号实际流式回复，检测降智和无法对话</p>
+        </div>
+        <span class="sso-job mono" id="quality-heading-status">尚未扫描</span>
+      </div>
+      <p class="recommend-banner">走家宽出口实聊。缺少 thinking 或 Token/s 过高记为降智；401/403 / permission-denied 记为风控。SSO botFlag 已不可用。</p>
+
+      <div class="sso-summary" id="quality-summary" aria-label="降智测试结果">
+        <div class="sso-summary-item"><div class="sso-summary-label">总数</div><div class="sso-summary-value" id="quality-kpi-total">--</div></div>
+        <div class="sso-summary-item"><div class="sso-summary-label">正常</div><div class="sso-summary-value ok" id="quality-kpi-healthy">--</div></div>
+        <div class="sso-summary-item"><div class="sso-summary-label">降智</div><div class="sso-summary-value fail" id="quality-kpi-degraded">--</div></div>
+        <div class="sso-summary-item"><div class="sso-summary-label">风控</div><div class="sso-summary-value fail" id="quality-kpi-risk">--</div></div>
+        <div class="sso-summary-item"><div class="sso-summary-label">失败</div><div class="sso-summary-value" id="quality-kpi-error">--</div></div>
+        <div class="sso-summary-item"><div class="sso-summary-label">进度</div><div class="sso-summary-value" id="quality-kpi-progress">--</div></div>
+      </div>
+
+      <div class="sso-import">
+        <div>
+          <div class="sso-source-row" role="group" aria-label="数据来源">
+            <button type="button" id="quality-src-cpa" aria-pressed="true" onclick="setQualitySource('cpa')">CPA auth</button>
+            <button type="button" id="quality-src-g2a" aria-pressed="false" onclick="setQualitySource('g2a')">Grok2API</button>
+            <button type="button" id="quality-src-all" aria-pressed="false" onclick="setQualitySource('all')">全部 auth</button>
+          </div>
+          <div class="sso-settings" style="margin-top:10px">
+            <div class="field">
+              <label for="quality-workers">并发</label>
+              <input type="number" id="quality-workers" min="1" max="8" value="2"/>
+            </div>
+            <div class="field">
+              <label for="quality-delay">间隔秒</label>
+              <input type="number" id="quality-delay" min="0" max="10" step="0.1" value="0.2"/>
+            </div>
+            <div class="field">
+              <label for="quality-proxy">代理（可空=家宽池）</label>
+              <input id="quality-proxy" type="text" autocomplete="off" placeholder="空则使用家宽 / 代理池"/>
+            </div>
+            <div class="field">
+              <label for="quality-limit">最多条数（0=不限）</label>
+              <input type="number" id="quality-limit" min="0" max="2000" value="0"/>
+            </div>
+          </div>
+          <p class="sso-format" id="quality-source-hint">扫描 cpa_auth。请求走家宽，让账号真正生成一段回复后再判定。</p>
+        </div>
+        <div class="button-group">
+          <button class="primary" id="quality-start" onclick="startQualityScan()">开始测试</button>
+          <button class="danger" id="quality-stop" onclick="stopQualityScan()">停止</button>
+          <button id="quality-export-degraded" onclick="exportQuality('degraded')">导出降智</button>
+          <button id="quality-export-risk" onclick="exportQuality('risk')">导出风控</button>
+        </div>
+      </div>
+      <div class="msg" id="quality-msg" role="status" aria-live="polite"></div>
+
+      <div class="sso-list-section">
+        <div class="sso-list-head">
+          <div>
+            <h2>检测明细</h2>
+            <div class="sso-job mono" id="quality-job-status" role="status" aria-live="polite">等待开始</div>
+          </div>
+          <div class="sso-filter" role="group" aria-label="结果筛选">
+            <button type="button" id="quality-filter-all" aria-pressed="true" onclick="setQualityFilter('all')">全部</button>
+            <button type="button" id="quality-filter-healthy" aria-pressed="false" onclick="setQualityFilter('healthy')">正常</button>
+            <button type="button" id="quality-filter-degraded" aria-pressed="false" onclick="setQualityFilter('degraded')">降智</button>
+            <button type="button" id="quality-filter-risk" aria-pressed="false" onclick="setQualityFilter('risk')">风控</button>
+            <button type="button" id="quality-filter-error" aria-pressed="false" onclick="setQualityFilter('error')">失败</button>
+          </div>
+        </div>
+        <div class="sso-table-wrap">
+          <table class="sso-table">
+            <thead><tr><th>邮箱</th><th>判定</th><th>TPS</th><th>thinking</th><th>tokens</th><th>耗时</th><th>说明</th></tr></thead>
+            <tbody id="quality-body"><tr><td colspan="7" class="sso-empty">选择 auth 目录后开始测试</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -2426,17 +2559,32 @@ HTML = r"""<!DOCTYPE html>
     <div class="msg" id="recovery-msg" role="status" aria-live="polite"></div>
   </section>
 
-  <section class="card panel" aria-labelledby="sso-dash-title">
+  <section class="card panel" aria-labelledby="quality-dash-title">
     <div class="section-head">
-      <h2 id="sso-dash-title">SSO 风控</h2>
-      <span class="section-meta mono" id="sso-dash-status">grok.com botFlag</span>
+      <h2 id="quality-dash-title">降智测试</h2>
+      <span class="section-meta mono" id="quality-dash-status">家宽实聊</span>
     </div>
     <p style="margin:0 0 10px;color:var(--muted);font-size:13px;line-height:1.5">
-      用 SSO 访问 grok.com，检查 <code>botFlagSource</code> / <code>policy=deny</code>，不换 token。
+      用家宽让 CPA / Grok2API 账号实际回复，按 thinking 和 Token/s 判断降智；401/403 记为风控。SSO botFlag 已不可用。
+    </p>
+    <div class="chips" id="quality-dash-kpis"></div>
+    <div class="button-group" style="margin-top:10px">
+      <button class="primary" onclick="toggleQualityView()">打开测试面板</button>
+      <button onclick="refreshQuality()">刷新</button>
+    </div>
+  </section>
+
+  <section class="card panel" aria-labelledby="sso-dash-title">
+    <div class="section-head">
+      <h2 id="sso-dash-title">SSO 风控（已停用）</h2>
+      <span class="section-meta mono" id="sso-dash-status">不再判定</span>
+    </div>
+    <p style="margin:0 0 10px;color:var(--muted);font-size:13px;line-height:1.5">
+      grok.com <code>botFlagSource</code> / <code>policy=deny</code> 已不能判断风控，注册也不会再据此拦截。仅保留对照扫描。
     </p>
     <div class="chips" id="sso-dash-kpis"></div>
     <div class="button-group" style="margin-top:10px">
-      <button class="primary" onclick="toggleSsoView()">打开检测面板</button>
+      <button onclick="toggleSsoView()">打开旧面板</button>
       <button onclick="refreshSsoState()">刷新</button>
     </div>
   </section>
@@ -2561,6 +2709,9 @@ let lastFullStats = null;
 let ssoSource = "paste";
 let ssoFilter = "all";
 let lastSsoState = null;
+let qualitySource = "cpa";
+let qualityFilter = "all";
+let lastQualityState = null;
 function syncThemeButtons() {
   const theme = document.documentElement.dataset.theme || "light";
   document.querySelectorAll("[data-theme-choice]").forEach(button => {
@@ -2576,12 +2727,13 @@ function setTheme(theme) {
   syncThemeButtons();
 }
 function setAppView(view, options = {}) {
-  if (view !== "dashboard" && view !== "help" && view !== "proxies" && view !== "domains" && view !== "sso") return;
+  if (view !== "dashboard" && view !== "help" && view !== "proxies" && view !== "domains" && view !== "sso" && view !== "quality") return;
   const dashboard = document.getElementById("dashboard-view");
   const help = document.getElementById("help-view");
   const proxies = document.getElementById("proxy-view");
   const domains = document.getElementById("domain-view");
   const sso = document.getElementById("sso-view");
+  const quality = document.getElementById("quality-view");
   const domainToggle = document.getElementById("domain-view-toggle");
   const domainLabel = document.getElementById("domain-view-label");
   const toggle = document.getElementById("help-view-toggle");
@@ -2590,13 +2742,16 @@ function setAppView(view, options = {}) {
   const proxyLabel = document.getElementById("proxy-view-label");
   const ssoToggle = document.getElementById("sso-view-toggle");
   const ssoLabel = document.getElementById("sso-view-label");
-  if (!dashboard || !help || !proxies || !domains || !sso || !domainToggle || !domainLabel || !toggle || !label || !proxyToggle || !proxyLabel || !ssoToggle || !ssoLabel) return;
+  const qualityToggle = document.getElementById("quality-view-toggle");
+  const qualityLabel = document.getElementById("quality-view-label");
+  if (!dashboard || !help || !proxies || !domains || !sso || !quality || !domainToggle || !domainLabel || !toggle || !label || !proxyToggle || !proxyLabel || !ssoToggle || !ssoLabel || !qualityToggle || !qualityLabel) return;
   const isHelp = view === "help";
   const isProxies = view === "proxies";
   const isDomains = view === "domains";
   const isSso = view === "sso";
-  const isOverlay = isHelp || isProxies || isDomains || isSso;
-  const dashboardChildren = Array.from(dashboard.children).filter(element => element !== help && element !== proxies && element !== domains && element !== sso);
+  const isQuality = view === "quality";
+  const isOverlay = isHelp || isProxies || isDomains || isSso || isQuality;
+  const dashboardChildren = Array.from(dashboard.children).filter(element => element !== help && element !== proxies && element !== domains && element !== sso && element !== quality);
   dashboardChildren.forEach(element => {
     element.inert = isOverlay;
     if (isOverlay) element.setAttribute("aria-hidden", "true");
@@ -2610,10 +2765,13 @@ function setAppView(view, options = {}) {
   domains.inert = !isDomains;
   sso.hidden = !isSso;
   sso.inert = !isSso;
+  quality.hidden = !isQuality;
+  quality.inert = !isQuality;
   document.body.classList.toggle("help-view-open", isHelp);
   document.body.classList.toggle("proxy-view-open", isProxies);
   document.body.classList.toggle("domain-view-open", isDomains);
   document.body.classList.toggle("sso-view-open", isSso);
+  document.body.classList.toggle("quality-view-open", isQuality);
   toggle.dataset.active = String(isHelp);
   toggle.setAttribute("aria-expanded", String(isHelp));
   toggle.setAttribute("aria-label", isHelp ? "返回控制台" : "打开问题和使用");
@@ -2631,9 +2789,14 @@ function setAppView(view, options = {}) {
   domainLabel.textContent = isDomains ? "返回控制台" : "邮箱服务";
   ssoToggle.dataset.active = String(isSso);
   ssoToggle.setAttribute("aria-expanded", String(isSso));
-  ssoToggle.setAttribute("aria-label", isSso ? "返回控制台" : "打开 SSO 风控");
-  ssoToggle.title = isSso ? "返回控制台" : "SSO 风控";
+  ssoToggle.setAttribute("aria-label", isSso ? "返回控制台" : "打开 SSO 风控（已停用）");
+  ssoToggle.title = isSso ? "返回控制台" : "SSO 风控（已停用）";
   ssoLabel.textContent = isSso ? "返回控制台" : "SSO 风控";
+  qualityToggle.dataset.active = String(isQuality);
+  qualityToggle.setAttribute("aria-expanded", String(isQuality));
+  qualityToggle.setAttribute("aria-label", isQuality ? "返回控制台" : "打开降智测试");
+  qualityToggle.title = isQuality ? "返回控制台" : "降智测试";
+  qualityLabel.textContent = isQuality ? "返回控制台" : "降智测试";
   if (options.persist !== false) {
     try { localStorage.setItem(APP_VIEW_KEY, view); } catch (e) {}
   }
@@ -2643,11 +2806,12 @@ function setAppView(view, options = {}) {
     refreshEmailDomains();
   }
   if (isSso) refreshSsoState();
+  if (isQuality) refreshQuality();
   if (options.focus) {
     requestAnimationFrame(() => {
       const target = isHelp
         ? document.querySelector('[data-help-tab][aria-selected="true"]')
-        : (isProxies ? document.getElementById("proxy-input") : (isDomains ? document.getElementById("mail-provider-select") : (isSso ? document.getElementById("sso-input") : (view === "dashboard" ? domainToggle : toggle))));
+        : (isProxies ? document.getElementById("proxy-input") : (isDomains ? document.getElementById("mail-provider-select") : (isSso ? document.getElementById("sso-input") : (isQuality ? document.getElementById("quality-start") : (view === "dashboard" ? domainToggle : toggle)))));
       if (target) target.focus();
     });
   }
@@ -2667,6 +2831,10 @@ function toggleDomainView() {
 function toggleSsoView() {
   const isSso = document.body.classList.contains("sso-view-open");
   setAppView(isSso ? "dashboard" : "sso", { focus: true });
+}
+function toggleQualityView() {
+  const isQuality = document.body.classList.contains("quality-view-open");
+  setAppView(isQuality ? "dashboard" : "quality", { focus: true });
 }
 function setHelpTab(name) {
   if (name !== "guide" && name !== "faq") return;
@@ -2722,13 +2890,13 @@ function initHelp() {
     view = localStorage.getItem(APP_VIEW_KEY) || "dashboard";
     tab = localStorage.getItem(HELP_TAB_KEY) || "guide";
   } catch (e) {}
-  if (!["dashboard", "help", "proxies", "domains", "sso"].includes(view)) view = "dashboard";
+  if (!["dashboard", "help", "proxies", "domains", "sso", "quality"].includes(view)) view = "dashboard";
   setHelpTab(tab);
   filterFaq("");
   setAppView(view, { persist: false, focus: false });
 }
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && (document.body.classList.contains("help-view-open") || document.body.classList.contains("proxy-view-open") || document.body.classList.contains("domain-view-open") || document.body.classList.contains("sso-view-open"))) {
+  if (event.key === "Escape" && (document.body.classList.contains("help-view-open") || document.body.classList.contains("proxy-view-open") || document.body.classList.contains("domain-view-open") || document.body.classList.contains("sso-view-open") || document.body.classList.contains("quality-view-open"))) {
     setAppView("dashboard", { focus: true });
   }
 });
@@ -2974,6 +3142,13 @@ function renderEmailProviderFields(provider) {
   document.getElementById("mail-provider-subtitle").textContent = persisted
     ? ("当前注册任务使用 " + definition.label)
     : ("待切换到 " + definition.label);
+  const recommend = document.getElementById("mail-recommend");
+  if (recommend) {
+    recommend.textContent = definition.hint
+      || (emailProviderData && emailProviderData.recommend_note)
+      || "推荐家宽出口 + Outlook 等真实邮箱。";
+    recommend.className = "recommend-banner" + (definition.kind === "domain" ? " warn" : "");
+  }
   const status = document.getElementById("mail-provider-status");
   status.textContent = definition.configured ? "已配置" : "待配置";
   status.className = "badge " + (definition.configured ? "ok" : "warn");
@@ -3393,7 +3568,7 @@ function setSsoSource(source) {
   const hint = document.getElementById("sso-source-hint");
   const counts = (lastSsoState && lastSsoState.sources) || {};
   const labels = {
-    paste: "粘贴 JWT 或 email----sso。判定规则与注册门禁一致：botFlag 1/2 或 policy=deny 记为标记。",
+    paste: "已停用。粘贴 JWT 仅对照历史 botFlag 字段，不能判断是否可聊。",
     pending: "扫描 accounts/sso_pending.txt（待补录队列，" + (counts.pending ?? 0) + " 行）。",
     accounts: "扫描 accounts/*.txt，不含已隔离风控和 bfs 名单（" + (counts.accounts ?? 0) + " 行）。",
     risk: "复检 accounts/sso_risk_rejected.txt（已隔离，" + (counts.risk ?? 0) + " 行）。",
@@ -3512,6 +3687,140 @@ async function exportSsoState(kind) {
     URL.revokeObjectURL(url);
     setMsg("sso-msg", "已导出 " + (data.lines || 0) + " 行脱敏状态记录", "ok");
   } catch (e) { setMsg("sso-msg", String(e.message || e), "err"); }
+}
+function setQualitySource(source) {
+  if (!["cpa", "g2a", "all"].includes(source)) return;
+  qualitySource = source;
+  ["cpa", "g2a", "all"].forEach(name => {
+    const btn = document.getElementById("quality-src-" + name);
+    if (btn) btn.setAttribute("aria-pressed", String(name === source));
+  });
+  const hint = document.getElementById("quality-source-hint");
+  const counts = (lastQualityState && lastQualityState.sources) || {};
+  const labels = {
+    cpa: "扫描 cpa_auth（" + (counts.cpa ?? 0) + "）。请求走家宽，让账号真正生成一段回复后再判定。",
+    g2a: "扫描 grok2api_auth（" + (counts.g2a ?? 0) + "）。",
+    all: "扫描 CPA + Grok2API auth（" + (counts.all ?? 0) + "）。",
+  };
+  if (hint) hint.textContent = labels[source] || labels.cpa;
+}
+function setQualityFilter(name) {
+  if (!["all", "healthy", "degraded", "risk", "error"].includes(name)) return;
+  qualityFilter = name;
+  ["all", "healthy", "degraded", "risk", "error"].forEach(key => {
+    const btn = document.getElementById("quality-filter-" + key);
+    if (btn) btn.setAttribute("aria-pressed", String(key === name));
+  });
+  renderQualityRows(lastQualityState);
+}
+function renderQuality(data) {
+  data = data || {};
+  lastQualityState = data;
+  const sum = data.summary || {};
+  const running = !!data.running;
+  const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  const degraded = sum.degraded_count ?? ((sum.soft_count || 0) + (sum.hard_count || 0) + (sum.burst_count || 0));
+  setText("quality-kpi-total", sum.total ?? data.total ?? "--");
+  setText("quality-kpi-healthy", sum.healthy_count ?? "--");
+  setText("quality-kpi-degraded", degraded);
+  setText("quality-kpi-risk", sum.risk_count ?? "--");
+  setText("quality-kpi-error", sum.error_count ?? "--");
+  const progress = (data.progress || 0) + "/" + (data.total || sum.total || 0);
+  setText("quality-kpi-progress", running ? progress : (sum.total ? String(sum.total) : "--"));
+  const status = running
+    ? ("测试中 " + progress)
+    : (data.error ? String(data.error) : (sum.scanned_at ? ("上次 " + sum.scanned_at) : "尚未扫描"));
+  setText("quality-heading-status", status);
+  setText("quality-job-status", status);
+  setText("quality-dash-status", running ? "测试中" : (sum.scanned_at || "家宽实聊"));
+  const dash = document.getElementById("quality-dash-kpis");
+  if (dash) {
+    dash.innerHTML = [
+      ["总数", sum.total ?? 0, ""],
+      ["正常", sum.healthy_count ?? 0, "ok"],
+      ["降智", degraded, degraded > 0 ? "fail" : ""],
+      ["风控", sum.risk_count ?? 0, (sum.risk_count || 0) > 0 ? "fail" : ""],
+    ].map(([label, value, cls]) => `<div class="chip"><span>${esc(label)}</span><b class="${cls}">${esc(value)}</b></div>`).join("");
+  }
+  const startBtn = document.getElementById("quality-start");
+  const stopBtn = document.getElementById("quality-stop");
+  if (startBtn) startBtn.disabled = running;
+  if (stopBtn) stopBtn.disabled = !running;
+  setQualitySource(qualitySource);
+  renderQualityRows(data);
+}
+function renderQualityRows(data) {
+  const body = document.getElementById("quality-body");
+  if (!body) return;
+  const rows = ((data && data.items) || []).filter(it => {
+    const verdict = it.verdict || "unknown";
+    if (qualityFilter === "all") return true;
+    if (qualityFilter === "degraded") return ["hard", "soft", "burst"].includes(verdict);
+    if (qualityFilter === "error") return verdict === "error" || verdict === "unknown" || verdict === "ignored";
+    return verdict === qualityFilter;
+  });
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="7" class="sso-empty">没有匹配的检测结果</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.slice(-400).map(it => {
+    const verdict = it.verdict || "unknown";
+    const note = it.error || "-";
+    return `<tr>
+      <td class="mono">${esc(it.email || "-")}</td>
+      <td><span class="sso-verdict ${esc(verdict)}">${esc(verdict)}</span></td>
+      <td class="mono">${esc(it.tps == null ? "-" : it.tps)}</td>
+      <td class="mono">${it.has_thinking ? "yes" : "no"}</td>
+      <td class="mono">${esc(it.output_tokens == null ? "-" : it.output_tokens)}</td>
+      <td class="mono">${esc(it.duration_ms == null ? "-" : (it.duration_ms + "ms"))}</td>
+      <td>${esc(note)}</td>
+    </tr>`;
+  }).join("");
+}
+async function refreshQuality(authHelp = false) {
+  try {
+    const data = await api("/api/quality?_=" + Date.now(), { authHelp });
+    renderQuality(data);
+  } catch (e) {
+    const st = document.getElementById("quality-dash-status");
+    if (st) st.textContent = String(e.message || e).includes("令牌") ? "等待令牌" : "检查失败";
+  }
+}
+async function startQualityScan() {
+  setMsg("quality-msg", "正在启动降智测试 ...", "");
+  try {
+    const payload = {
+      source: qualitySource,
+      workers: Number((document.getElementById("quality-workers") || {}).value || 2),
+      delay: Number((document.getElementById("quality-delay") || {}).value || 0.2),
+      proxy: (document.getElementById("quality-proxy") || {}).value || "",
+      limit: Number((document.getElementById("quality-limit") || {}).value || 0),
+      prefer_home: true,
+    };
+    const data = await api("/api/quality/start", { method: "POST", body: JSON.stringify(payload) });
+    setMsg("quality-msg", "已启动，共 " + (data.total || 0) + " 条，家宽 " + (data.proxy_count || 0) + " 条", "ok");
+    await refreshQuality();
+  } catch (e) { setMsg("quality-msg", String(e.message || e), "err"); }
+}
+async function stopQualityScan() {
+  try {
+    await api("/api/quality/stop", { method: "POST", body: "{}" });
+    setMsg("quality-msg", "已请求停止", "ok");
+    await refreshQuality();
+  } catch (e) { setMsg("quality-msg", String(e.message || e), "err"); }
+}
+async function exportQuality(kind) {
+  try {
+    const data = await api("/api/quality/export", { method: "POST", body: JSON.stringify({ kind }) });
+    const blob = new Blob([data.content || ""], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = kind === "risk" ? "quality_risk_redacted.jsonl" : "quality_degraded_redacted.jsonl";
+    a.click();
+    URL.revokeObjectURL(url);
+    setMsg("quality-msg", "已导出 " + (data.lines || 0) + " 行脱敏结果", "ok");
+  } catch (e) { setMsg("quality-msg", String(e.message || e), "err"); }
 }
 function renderBlacklist(bl, upd) {
   bl = bl || {};
@@ -3793,9 +4102,13 @@ setInterval(refreshRecovery, 5000);
 refreshBfs();
 setInterval(refreshBfs, 15000);
 refreshSsoState();
+refreshQuality();
 setInterval(() => {
   if (document.body.classList.contains("sso-view-open") || (lastSsoState && lastSsoState.running)) {
     refreshSsoState(false);
+  }
+  if (document.body.classList.contains("quality-view-open") || (lastQualityState && lastQualityState.running)) {
+    refreshQuality(false);
   }
 }, 2000);
 setInterval(() => {
@@ -3913,7 +4226,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/health":
             self._json(200, {"ok": True})
             return
-        if u.path in ("/api/status", "/api/blacklist", "/api/stats", "/api/control", "/api/recovery", "/api/proxies", "/api/email-provider", "/api/email-domains", "/api/bfs", "/api/sso-state"):
+        if u.path in ("/api/status", "/api/blacklist", "/api/stats", "/api/control", "/api/recovery", "/api/proxies", "/api/email-provider", "/api/email-domains", "/api/bfs", "/api/sso-state", "/api/quality"):
             if not self._require_read():
                 return
         if u.path == "/api/status":
@@ -3954,6 +4267,12 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/sso-state":
             try:
                 self._json(200, sso_state_status())
+            except Exception as e:
+                self._json(500, {"ok": False, "error": redact_log_line(str(e))})
+            return
+        if u.path == "/api/quality":
+            try:
+                self._json(200, quality_status())
             except Exception as e:
                 self._json(500, {"ok": False, "error": redact_log_line(str(e))})
             return
@@ -4070,6 +4389,34 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/sso-state/export":
             try:
                 result = read_sso_state_export(str((body or {}).get("kind") or "flagged"))
+                self._json(200 if result.get("ok") else 404, result)
+            except Exception as e:
+                self._json(500, {"ok": False, "error": redact_log_line(str(e))})
+            return
+        if u.path == "/api/quality/start":
+            try:
+                result = start_quality_scan(
+                    source=str((body or {}).get("source") or "cpa"),
+                    proxy=str((body or {}).get("proxy") or ""),
+                    prefer_home=bool((body or {}).get("prefer_home", True)),
+                    workers=(body or {}).get("workers", 2),
+                    delay=(body or {}).get("delay", 0.2),
+                    limit=(body or {}).get("limit", 0),
+                )
+                code = 200 if result.get("ok") else (409 if result.get("running") else 400)
+                self._json(code, result)
+            except Exception as e:
+                self._json(500, {"ok": False, "error": redact_log_line(str(e))})
+            return
+        if u.path == "/api/quality/stop":
+            try:
+                self._json(200, stop_quality_scan())
+            except Exception as e:
+                self._json(500, {"ok": False, "error": redact_log_line(str(e))})
+            return
+        if u.path == "/api/quality/export":
+            try:
+                result = read_quality_export(str((body or {}).get("kind") or "degraded"))
                 self._json(200 if result.get("ok") else 404, result)
             except Exception as e:
                 self._json(500, {"ok": False, "error": redact_log_line(str(e))})

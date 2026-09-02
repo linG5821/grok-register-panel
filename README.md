@@ -5,7 +5,7 @@
 Based on [AaronL725/grok-register](https://github.com/AaronL725/grok-register) (MIT).
 
 批量注册 Grok 账号（Camoufox）+ Web 监控面板  
-任务编排 / 代理池 / 邮箱服务 / 域名轮换 / 账号补录 / BFS 检测 / **Token 鉴权**
+任务编排 / 代理池 / 邮箱服务 / 账号补录 / BFS 检测 / **降智测试** / **Token 鉴权**
 
 [介绍页](https://lij768423-svg.github.io/grok-register-panel/) · [Discussions](https://github.com/lij768423-svg/grok-register-panel/discussions)
 
@@ -25,14 +25,14 @@ Based on [AaronL725/grok-register](https://github.com/AaronL725/grok-register) (
 | 能力 | 说明 |
 |------|------|
 | 注册全链路 | 邮箱 OTP → 资料页 → Turnstile → SSO → Device / OAuth → 写入 CPA / Grok2API |
-| 多邮箱后端 | Cloudflare Worker 邮、DuckMail、YYDS、MailNest、CloudMail、MoeMail、Inbucket 自建；面板内切换、保存和连通性测试 |
+| 多邮箱后端 | **推荐 Outlook RT 库存**；也支持 DuckMail、MailNest、Cloudflare Worker 邮、YYDS、CloudMail、MoeMail、Inbucket 自建。域名邮箱不作为主路径 |
 | 反检测浏览器 | [Camoufox](https://camoufox.com/)（Gecko 层指纹） |
-| 出口预检 | 启动前解析出口 IP / ASN，命中黑名单直接换口 |
-| 风控早停 | `botFlagSource=1` + `policy=deny` 时跳过后续 OAuth，避免无效重试 |
-| **BFS 检测** | 解码 access_token / SSO JWT，检查是否含 `bfs` claim（与 botFlag 独立）；注册后自动标记，面板可批量扫描 CPA |
-| **SSO 风控面板** | 用现有 SSO 读 grok.com 的 `botFlagSource` / `policy=deny`，不换 token；可粘贴或扫描库存，面板只导出不含凭据的脱敏状态名单 |
+| 出口预检 | 启动前解析出口 IP / ASN，命中黑名单直接换口；**优先家宽** |
+| **降智测试** | 用配置的家宽让 CPA / Grok2API 账号实际流式回复：缺 thinking 或 Token/s 过高记降智，401/403 记风控 |
+| **BFS 检测** | 解码 access_token / SSO JWT，检查是否含 `bfs` claim；注册后自动标记，面板可批量扫描 CPA |
+| SSO 对照扫描 | grok.com `botFlagSource` / `policy=deny` **已不可靠**，不再作为风控门禁；旧面板仅保留对照 |
 | 编排器 | 多轮 batch、风控满 N 暂停、ASN 自动扩黑；规则写入 JSON 状态，不修改源码 |
-| **Live 面板** | 启停、并发、再跑 N、黑名单、时段成功率、本批代理流量、账号补录、SSO 风控和 BFS 扫描；操作 API 需 `MONITOR_TOKEN` |
+| **Live 面板** | 启停、并发、再跑 N、黑名单、时段成功率、本批代理流量、账号补录、降智测试和 BFS 扫描；操作 API 需 `MONITOR_TOKEN` |
 | 外部代理池 | 面板单条/批量导入、去重、探活、启停、删除；记录出口 IP、ASN、延迟和冷却状态 |
 | 邮箱域名池 | 自有域名/子域名导入、provider 绑定、连续拒绝阈值、自动拉黑、活跃数限制和手动重置 |
 | 失败恢复 | 待处理 SSO / accounts 文本补录 CPA，跳过已有账号，成功后自动出队 |
@@ -223,8 +223,8 @@ python webui/monitor.py
 2. 填入与 `MONITOR_TOKEN` **相同**的字符串（自动写入 `localStorage`）  
 3. 设模式 / workers / batch 数量 / 再跑 N / 风控满 N → **启动**
 4. 需要多出口时打开顶部 **代理池**，导入代理并等待检测完成
-5. 打开顶部 **邮箱服务**，选择 provider、填写对应参数，保存后执行一次连接测试
-6. 需要多个自有收信域名轮换时，再展开 **域名轮换 · 高级设置** 导入域名并保存规则
+5. 打开顶部 **邮箱服务**，优先选 **Outlook RT**，填写库存路径后保存并测试。不要把域名邮箱当主路径
+6. 需要检测存量账号是否降智 / 无法对话时，打开顶部 **降智测试**，走家宽批量实聊
 
 ### 静态资源缓存与批次流量
 
@@ -380,22 +380,32 @@ python sso_to_auth_json.py \
   --report-json log/recovery_report.json
 ```
 
-### SSO 风控检测（botFlag / policy）
+### 降智测试（家宽实聊）
 
-用现有 SSO 访问 grok.com，读取 `botFlagSource` / `policy=deny`，**不换 token、不入库**。判定与注册门禁一致：`botFlagSource` 为 1/2，或任意 `policy=deny`。
+SSO 读 grok.com `botFlagSource` **已经不能判断风控**。改用 CPA / Grok2API 的 access_token，经配置的家宽出口让账号**实际流式回复**，再按 thinking 与 Token/s 分类。
+
+| 判定 | 含义 |
+|------|------|
+| `healthy` | 有 thinking，Token/s 低于 soft（默认 200） |
+| `soft` / `hard` / `burst` | 降智：缺 thinking，或 Token/s 过高 / 短窗口虚高 |
+| `risk` | 401/403、permission-denied 等账号不可聊 |
+| `error` | 代理或传输失败 |
 
 | 能力 | 说明 |
 |------|------|
-| 面板 | 顶部「SSO 风控」：粘贴列表，或扫描待处理 / 全部账号 / 已隔离名单 |
-| 导出 | 面板下载的标记/干净名单均为脱敏 JSONL，不含 SSO；本机受保护的 `log/sso_clean.txt` 保留原始行，仅供操作者在主机上继续传给 `--sso`，不会通过 API 返回 |
-| CLI | `python scripts/check_sso_state.py --sso list.txt --from-config config.json` |
+| 面板 | 顶部「降智测试」：扫描 `cpa_auth` / `grok2api_auth`，默认走家宽池 |
+| 导出 | 脱敏 JSONL，不含 token：`log/quality_degraded.jsonl`、`log/quality_risk.jsonl` |
+| CLI | `python scripts/check_quality.py --dir cpa_auth --from-config config.json` |
 
 ```bash
-python sso_to_auth_json.py --check-sso-state sso_list.txt --from-config config.json \
-  --sso-state-export log/sso_flagged.jsonl \
-  --sso-state-clean-export log/sso_clean.txt \
-  --report-json log/sso_state_report.json
+python scripts/check_quality.py --dir cpa_auth --from-config config.json \
+  --workers 3 --export log/quality_degraded.jsonl \
+  --risk-export log/quality_risk.jsonl
 ```
+
+### SSO 对照扫描（已停用判定）
+
+旧的 grok.com `botFlagSource` / `policy=deny` 扫描仍可打开，但**不再作为风控门禁**，注册也不会再据此跳过 OAuth。请用上面的降智测试。
 
 ### BFS 检测（JWT claim）
 
@@ -429,10 +439,10 @@ python scripts/check_bfs.py --token 'eyJ...'
 
 以下为社区常见踩坑方向，**环境差异大，仅供参考**：
 
-1. 邮箱：二级域名临时邮往往比批发一级域 / 大盘 Outlook·Google 更省事  
-2. 出口：质量与冷却窗口影响大；同一出口短时间打太满容易抬失败率  
-3. 风控字段：服务端 deny 后宜尽早结束 OAuth 路径  
-4. JWT `bfs`：与 botFlag 分开统计；入库前可用面板/CLI 批量扫 CPA  
+1. 邮箱：优先 Outlook 等真实邮箱；**不要用域名邮箱当主路径**  
+2. 出口：优先家宽；质量与冷却窗口影响大，同一出口短时间打太满容易抬失败率和降智  
+3. 风控 / 降智：不要再用 SSO botFlag；用面板「降智测试」走家宽实聊  
+4. JWT `bfs`：与页面 botFlag 分开统计；入库前可用面板/CLI 批量扫 CPA  
 5. 并发建议从 2～3 起跳，过高易空页、Turnstile 卡住、代理打满  
 6. 「资料填写失败」有时是资料页人机未过，不一定是姓名密码写不进  
 7. 链式代理在客户端配，不在注册机 Python 里写死  
@@ -445,6 +455,7 @@ python scripts/check_bfs.py --token 'eyJ...'
 ├── register_flow.py           # 注册页流程 / Turnstile
 ├── browser_session.py         # 会话、出口探测、ASN 黑名单
 ├── sso_to_auth_json.py        # SSO → OAuth / 写 CPA（auth 文件 0600）
+├── quality_probe.py           # 家宽实聊降智 / 风控探测
 ├── camoufox_adapter.py
 ├── connectivity.py
 ├── batch_supervisor.py        # 批处理监督、卡死恢复与原子进度
@@ -460,11 +471,13 @@ python scripts/check_bfs.py --token 'eyJ...'
 │   ├── process_utils.py       # 当前项目实例的进程发现 / 停止
 │   ├── recovery_ops.py        # SSO / accounts 异步补录
 │   ├── bfs_ops.py             # JWT bfs 扫描 / 面板接口
+│   ├── quality_ops.py         # 降智测试任务 / 面板接口
 │   └── blacklist_ops.py       # 面板黑名单接口
 ├── email_providers/
 ├── tests/                     # 结构 / 脱敏 / bfs / chdir 冒烟
 ├── scripts/
 │   ├── check_bfs.py           # 批量 bfs 扫描
+│   ├── check_quality.py       # 批量降智 / 风控实聊
 │   └── …                      # xvfb 等辅助
 ├── config.example.json
 ├── proxies.example.txt

@@ -27,8 +27,12 @@ bulk abuse.
   behavior there instead of branching throughout the registration flow.
 - `webui/monitor.py` owns the HTTP server and embedded UI. Its focused stores
   and operations live in `webui/*_store.py` and `webui/*_ops.py`.
-- `webui/sso_state_ops.py` owns the SSO botFlag / policy scan job. Reports must
-  not include raw SSO tokens; clean exports stay in `log/sso_clean.txt`.
+- `webui/sso_state_ops.py` owns the deprecated SSO botFlag / policy scan job.
+  Reports must not include raw SSO tokens; clean exports stay in
+  `log/sso_clean.txt`. Do not use this scan as a live risk gate.
+- `quality_probe.py` and `webui/quality_ops.py` own the 降智测试: real streamed
+  chat replies over 家宽/proxy pool. Panel exports must not include access
+  tokens. Prefer home proxies from `proxy_store.worker_proxy_details()`.
 - `webui/proxy_store.py` owns proxy import, normalization, health, cooldown, and
   redacted API views. `webui/email_provider_store.py` owns provider config and
   secret-preserving updates. `webui/email_domain_store.py` owns domain rotation
@@ -52,7 +56,9 @@ bulk abuse.
 4. Email provider/domain selection occurs before the registration form. Only an
    explicit xAI domain rejection increments domain rejection state.
 5. Successful SSO can be converted to CPA/Grok2API auth. BFS detection is a JWT
-   claim check separate from `botFlagSource` and policy denial.
+   claim check separate from the deprecated grok.com `botFlagSource` page field.
+   Account chat quality / 风控 is judged by `quality_probe` (real replies), not
+   SSO homepage scraping.
 6. The panel reads JSON/runtime state and controls only processes whose command
    line resolves to this project root.
 
@@ -157,8 +163,9 @@ stored value, explicit clear removes it, and connection tests must not mutate
   API errors, OTP timeouts, and network failures do not blacklist a domain.
 - When a configured provider domain pool is exhausted, fail clearly instead of
   falling back to disabled, blocked, or legacy domains.
-- Preserve all six supported provider adapters and secret-preserving save/test
-  semantics when changing the email UI or config schema.
+- Preserve all supported provider adapters and secret-preserving save/test
+  semantics when changing the email UI or config schema. Recommend Outlook-class
+  mailboxes and 家宽 exits; do not present custom domain mail as the default.
 
 ## Static Cache Rules
 

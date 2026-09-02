@@ -20,15 +20,39 @@ CONFIG_PATH = Path(
 LOCK_PATH = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".lock")
 
 PROVIDER_LABELS = {
-    "cloudflare": "Cloudflare",
+    "outlook_rt": "Outlook RT 库存（推荐）",
     "duckmail": "DuckMail / Mail.tm",
-    "yyds": "YYDS",
     "mailnest": "MailNest",
+    "yyds": "YYDS",
+    "cloudflare": "Cloudflare",
     "cloudmail": "CloudMail",
     "moemail": "MoeMail",
-    "outlook_rt": "Outlook RT 库存",
     "inbucket": "Inbucket",
 }
+PROVIDER_KIND = {
+    "outlook_rt": "mailbox",
+    "duckmail": "mailbox",
+    "mailnest": "mailbox",
+    "yyds": "domain",
+    "cloudflare": "domain",
+    "cloudmail": "domain",
+    "moemail": "domain",
+    "inbucket": "domain",
+}
+PROVIDER_HINTS = {
+    "outlook_rt": "推荐：Outlook 等真实邮箱，配合家宽出口",
+    "duckmail": "第三方临时邮，稳定性不如 Outlook",
+    "mailnest": "第三方临时邮，稳定性不如 Outlook",
+    "yyds": "域名邮箱，容易被拒，不推荐作为主路径",
+    "cloudflare": "域名邮箱，容易被拒，不推荐作为主路径",
+    "cloudmail": "域名邮箱，容易被拒，不推荐作为主路径",
+    "moemail": "域名邮箱，容易被拒，不推荐作为主路径",
+    "inbucket": "自建域名邮箱，容易被拒，不推荐作为主路径",
+}
+RECOMMENDED_PROVIDERS = ("outlook_rt",)
+DOMAIN_PROVIDERS = tuple(
+    name for name, kind in PROVIDER_KIND.items() if kind == "domain"
+)
 SUPPORTED_PROVIDERS = tuple(PROVIDER_LABELS)
 
 FIELD_DEFINITIONS = {
@@ -436,6 +460,9 @@ def _public_state(raw: dict, error: str = "") -> dict:
                 "id": provider,
                 "label": PROVIDER_LABELS[provider],
                 "configured": _is_configured(provider, values),
+                "recommended": provider in RECOMMENDED_PROVIDERS,
+                "kind": PROVIDER_KIND.get(provider, "mailbox"),
+                "hint": PROVIDER_HINTS.get(provider, ""),
                 "fields": [_field_payload(name) for name in PROVIDER_FIELDS[provider]],
             }
         )
@@ -452,6 +479,8 @@ def _public_state(raw: dict, error: str = "") -> dict:
         "providers": providers,
         "values": public_values,
         "secret_configured": secret_configured,
+        "recommended_provider": RECOMMENDED_PROVIDERS[0],
+        "recommend_note": "推荐家宽出口 + Outlook 等真实邮箱，不要用域名邮箱作为主路径。",
         "config_exists": CONFIG_PATH.exists(),
         "mtime": mtime,
     }

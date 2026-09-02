@@ -4,8 +4,14 @@
 
 ### Added
 
+- Add a panel **降智测试** that batch-probes CPA / Grok2API accounts with a real streamed reply over configured 家宽 proxies. Missing thinking or inflated Token/s is degraded; 401/403 / permission-denied is risk. CLI: `scripts/check_quality.py`.
 - Add an `inbucket` email provider for self-hosted Inbucket instances: generate addresses under a configured receive domain and poll the v1 mailbox API for the xAI verification code. Root domains accept a comma-separated rotation list, and `inbucket_random_levels` can stack 1-3 random subdomain labels per address (wildcard MX required).
 - Treat Windows as a first-class runtime: PowerShell setup/batch/panel scripts, Playwright `node.exe` + EPIPE guard (no bash wrapper), default headless batches, and SOCKS5 `PySocks` as a direct dependency so the panel can import remote residential URLs without Linux mixed ports.
+
+### Changed
+
+- Stop using grok.com `botFlagSource` / `policy=deny` as a registration risk gate or operational verdict. SSO scan remains as a deprecated diagnostic only.
+- Recommend residential (家宽) exits and Outlook-class mailboxes; domain emails are no longer the suggested default.
 
 ### Fixed
 
